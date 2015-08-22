@@ -35,9 +35,9 @@ class Form(QDialog):
         # which is more Python-like than the old QT style.
         # Below is how to use the new syntax when the event receives different
         # types of params. E.g., currentIndexChanged can take either int or QString
-        self.fromComboBox.currentIndexChanged['int'].connect(self.updateUI)
-        self.toComboBox.currentIndexChanged['int'].connect(self.updateUI)
-        self.fromSpinBox.valueChanged['double'].connect(self.updateUI)
+        self.fromComboBox.currentIndexChanged[int].connect(self.updateUI)
+        self.toComboBox.currentIndexChanged[int].connect(self.updateUI)
+        self.fromSpinBox.valueChanged[float].connect(self.updateUI)
         self.setWindowTitle('Currency converter')
 
     def updateUI(self):
