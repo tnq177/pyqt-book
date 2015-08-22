@@ -1,0 +1,1 @@
+Just my code when learning the book Rapid GUI Development with PyQT
