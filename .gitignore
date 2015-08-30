@@ -10,8 +10,5 @@ pyqtbook.sublime-workspace
 data/B3+CGRP-20x-1a.tif
 data/B3+CGRP-20x-1ab.tif
 data/B3+CGRP-20x-1b.tif
-data/Image_01.jpg
-data/Image_02.jpg
-data/Image_04.jpg
-data/Image_06.jpg
-data/Image_09.jpg
+data
+*.pyc
