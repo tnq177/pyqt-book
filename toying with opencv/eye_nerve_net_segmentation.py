@@ -5,6 +5,34 @@ from PyQt4.QtCore import *
 from PyQt4.QtGui import *
 from common_utils import thinning, toQImage, bgr2qimage
 
+
+class Worker(QThread):
+
+    def __init__(self, parent=None):
+        super(Worker, self).__init__(parent)
+        self.exiting = False
+
+    def __del__(self):
+        self.exiting = True
+        self.wait()
+
+    def processImage(self, image, thresholdValue, offsetValue):
+        self.image = image
+        self.thresholdValue = thresholdValue
+        self.offsetValue = offsetValue
+        self.start()
+
+    def run(self):
+        if self.image is None:
+            self.emit(SIGNAL("output"), None, None)
+
+        gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+        thresh = cv2.adaptiveThreshold(~gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                            cv2.THRESH_BINARY_INV, self.thresholdValue, self.offsetValue)
+        thinned_image = thinning(thresh)
+        self.emit(SIGNAL("output"), thinned_image, thresh)
+
+
 class ImageLabel(QLabel):
 
     def __init__(self, parent=None, acceptDrop=True):
@@ -46,6 +74,8 @@ class SegmentationWidget(QWidget):
         super(SegmentationWidget, self).__init__(parent)
 
         self.gray = None
+        self.thread = Worker()
+
         self.setupUI()
         self.setupEvents()
 
@@ -92,10 +122,18 @@ class SegmentationWidget(QWidget):
         self.setLayout(layout)
 
     def setupEvents(self):
-        self.thresholdBlockSlider.valueChanged[int].connect(self.updateUI)
-        self.offsetSlider.valueChanged[int].connect(self.updateUI)
+        self.thresholdBlockSlider.valueChanged[
+            int].connect(self.prepareUpdateUI)
+        self.offsetSlider.valueChanged[int].connect(self.prepareUpdateUI)
+        self.connect(
+            self.thread, SIGNAL("output"), self.updateImage)
+        self.thread.terminated.connect(self.updateUI)
+        self.thread.finished.connect(self.updateUI)
 
-    def updateUI(self):
+    def prepareUpdateUI(self):
+        if self.inputImageLabel.image is None:
+            return
+
         newThresholdBlockValue = self.thresholdBlockSlider.value()
         if newThresholdBlockValue % 2 == 0:
             if newThresholdBlockValue == 100:
@@ -104,31 +142,35 @@ class SegmentationWidget(QWidget):
                 newThresholdBlockValue += 1
             self.thresholdBlockSlider.setValue(newThresholdBlockValue)
 
+        self.thresholdBlockSlider.setEnabled(False)
+        self.offsetSlider.setEnabled(False)
+        self.thread.processImage(
+            self.inputImageLabel.image, self.thresholdBlockSlider.value(), self.offsetSlider.value())
+
+    def updateUI(self):
+        self.thresholdBlockSlider.setEnabled(True)
+        self.offsetSlider.setEnabled(True)
+
+    def updateImage(self, thinned_image, merged_image):
         self.offsetLabel.setText(
             "Offset value: {0}".format(self.offsetSlider.value()))
         self.thresholdBlockLabel.setText(
             "Threshold block value: {0}".format(self.thresholdBlockSlider.value()))
 
-        if self.inputImageLabel.image is None:
+        if thinned_image is None or merged_image is None:
             return
 
-        self.gray = cv2.cvtColor(
-            self.inputImageLabel.image, cv2.COLOR_BGR2GRAY)
-        self.thresh = cv2.adaptiveThreshold(~self.gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                            cv2.THRESH_BINARY_INV, self.thresholdBlockSlider.value(), self.offsetSlider.value())
-
-        # self.skeletonImageLabel.image = img_as_ubyte(skeletonize(self.thresh))
-        self.skeletonImageLabel.image = thinning(self.thresh)
-        self.skeletonImageLabel.qimage = toQImage(
-            self.skeletonImageLabel.image)
+        self.skeletonImageLabel.image = thinned_image
+        self.skeletonImageLabel.qimage = toQImage(thinned_image)
         self.skeletonImageLabel.setScaledPixmap()
 
-        self.mergedImageLabel.image = self.thresh
-        self.mergedImageLabel.qimage = toQImage(self.mergedImageLabel.image)
+        self.mergedImageLabel.image = merged_image
+        self.mergedImageLabel.qimage = toQImage(merged_image)
         self.mergedImageLabel.setScaledPixmap()
 
 
-app = QApplication(sys.argv)
-segWidget = SegmentationWidget()
-segWidget.show()
-app.exec_()
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    segWidget = SegmentationWidget()
+    segWidget.show()
+    app.exec_()
