@@ -19,11 +19,12 @@ class Worker(QThread):
         self.exiting = True
         self.wait()
 
-    def processImage(self, image, thresholdValue, offsetValue, channel):
+    def processImage(self, image, thresholdValue, offsetValue, channel, alpha=0.5):
         self.image = image
         self.channel = channel
         self.thresholdValue = thresholdValue
         self.offsetValue = offsetValue
+        self.alpha = alpha
         self.start()
 
     def run(self):
@@ -37,7 +38,7 @@ class Worker(QThread):
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         thinned_image = thinning(thresh)
         merged_image = cv2.addWeighted(
-            self.image, 0.5, cv2.cvtColor(thinned_image, cv2.COLOR_GRAY2BGR), 0.5, 0)
+            self.image, self.alpha, cv2.cvtColor(thinned_image, cv2.COLOR_GRAY2BGR), 1 - self.alpha, 0)
         pixel_count = thinned_image.shape[0] * thinned_image.shape[1]
         white_pixel_count = np.count_nonzero(thinned_image)
         result_string = "Pixels count / White pixels count = {0}/{1} = {2}".format(
@@ -57,8 +58,6 @@ class ImageLabel(QLabel):
         self.qimage = None
         self.channel = None
         self.windowName = windowName
-
-        self.mouseReleaseEvent = self.popUpImageView
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -87,11 +86,15 @@ class ImageLabel(QLabel):
             self.size(), Qt.KeepAspectRatio)
         self.setPixmap(scaledPixmap)
 
-    def popUpImageView(self, event):
+    def mouseDoubleClickEvent(self, event):
+        self.popUpImageView()
+
+    def popUpImageView(self):
         if self.image is None:
             return
 
-        cv2.imshow(self.windowName, self.image)
+        popUpImage = cv2.resize(self.image, dsize=None, fx=0.75, fy=0.75)
+        cv2.imshow(self.windowName, popUpImage)
 
 
 class SegmentationWidget(QWidget):
@@ -108,34 +111,48 @@ class SegmentationWidget(QWidget):
     def setupUI(self):
         self.setWindowTitle(emoji.emojize(':cloud::snowflake:'))
         self.inputImageLabel = ImageLabel(windowName='Input')
-        self.skeletonImageLabel = ImageLabel(acceptDrop=False, windowName='Skeletonized')
-        self.mergedImageLabel = ImageLabel(acceptDrop=False, windowName='Merged')
+        self.skeletonImageLabel = ImageLabel(
+            acceptDrop=False, windowName='Skeletonized')
+        self.mergedImageLabel = ImageLabel(
+            acceptDrop=False, windowName='Merged')
 
         self.thresholdBlockLabel = QLabel('ThresholdBlock value: 39')
         self.thresholdBlockSlider = QSlider(Qt.Horizontal, self)
         self.thresholdBlockSlider.setRange(1, 199)
-        self.thresholdBlockSlider.setFocusPolicy(Qt.NoFocus)
         self.thresholdBlockSlider.setValue(39)
         self.thresholdBlockSlider.setSingleStep(2)
+        self.thresholdBlockSlider.setFocusPolicy(Qt.TabFocus)
+        self.thresholdBlockSlider.setFocus()
 
         self.offsetLabel = QLabel('Offset value: 10')
         self.offsetSlider = QSlider(Qt.Horizontal, self)
         self.offsetSlider.setRange(0, 100)
-        self.offsetSlider.setFocusPolicy(Qt.NoFocus)
         self.offsetSlider.setValue(10)
+        self.offsetSlider.setFocusPolicy(Qt.TabFocus)
+
         self.resultLabel = QLabel('Result displayed here.')
+
+        self.alphaSliderLabel = QLabel('Alpha (blending factor): 0.5')
+        self.alphaSlider = QSlider(Qt.Horizontal, self)
+        self.alphaSlider.setRange(0, 100)
+        self.alphaSlider.setValue(50)
+        self.alphaSlider.setFocusPolicy(Qt.TabFocus)
 
         sublayout = QGridLayout()
         sublayout.addWidget(self.thresholdBlockLabel, 0, 0, 1, 2)
         sublayout.addWidget(self.thresholdBlockSlider, 1, 0, 1, 2)
         sublayout.addWidget(self.offsetLabel, 2, 0, 1, 2)
         sublayout.addWidget(self.offsetSlider, 3, 0, 1, 2)
-        sublayout.addWidget(self.resultLabel, 4, 0, 1, 2)
+        sublayout.addWidget(self.alphaSliderLabel, 4, 0, 1, 2)
+        sublayout.addWidget(self.alphaSlider, 5, 0, 1, 2)
+        sublayout.addWidget(self.resultLabel, 6, 0, 1, 2)
         sublayout.setRowStretch(0, 0)
         sublayout.setRowStretch(1, 0)
         sublayout.setRowStretch(2, 0)
         sublayout.setRowStretch(3, 0)
         sublayout.setRowStretch(4, 0)
+        sublayout.setRowStretch(5, 0)
+        sublayout.setRowStretch(6, 0)
 
         layout = QGridLayout()
         layout.addWidget(self.inputImageLabel, 0, 0)
@@ -152,6 +169,7 @@ class SegmentationWidget(QWidget):
         self.setLayout(layout)
 
     def setupEvents(self):
+        # Heavy processing related events
         self.thresholdBlockSlider.valueChanged[
             int].connect(self.prepareUpdateUI)
         self.offsetSlider.valueChanged[int].connect(self.prepareUpdateUI)
@@ -160,7 +178,16 @@ class SegmentationWidget(QWidget):
         self.thread.terminated.connect(self.updateUI)
         self.thread.finished.connect(self.updateUI)
 
+        # Light processing related events
+        self.alphaSlider.valueChanged[int].connect(self.updateMergedImage)
+
     def prepareUpdateUI(self):
+        self.offsetLabel.setText(
+            "Offset value: {0}".format(self.offsetSlider.value()))
+        self.thresholdBlockLabel.setText(
+            "Threshold block value: {0}".format(self.thresholdBlockSlider.value()))
+        self.alphaSliderLabel.setText("Alpha value: {0}".format(self.alphaSlider.value() / 100))
+
         if self.inputImageLabel.image is None:
             return
 
@@ -175,18 +202,13 @@ class SegmentationWidget(QWidget):
         self.thresholdBlockSlider.setEnabled(False)
         self.offsetSlider.setEnabled(False)
         self.thread.processImage(self.inputImageLabel.image, self.thresholdBlockSlider.value(
-        ), self.offsetSlider.value(), self.inputImageLabel.channel)
+        ), self.offsetSlider.value(), self.inputImageLabel.channel, alpha=self.alphaSlider.value() / 100)
 
     def updateUI(self):
         self.thresholdBlockSlider.setEnabled(True)
         self.offsetSlider.setEnabled(True)
 
     def updateImage(self, thinned_image, merged_image, result_string):
-        self.offsetLabel.setText(
-            "Offset value: {0}".format(self.offsetSlider.value()))
-        self.thresholdBlockLabel.setText(
-            "Threshold block value: {0}".format(self.thresholdBlockSlider.value()))
-
         if thinned_image is None or merged_image is None:
             return
 
@@ -197,8 +219,23 @@ class SegmentationWidget(QWidget):
         self.mergedImageLabel.image = merged_image
         self.mergedImageLabel.qimage = bgr2qimage(merged_image)
         self.mergedImageLabel.setScaledPixmap()
+        self.mergedImageLabel.popUpImageView()
 
         self.resultLabel.setText(result_string)
+
+    def updateMergedImage(self):
+        alpha = self.alphaSlider.value() / 100
+        self.alphaSliderLabel.setText("Alpha value: {0}".format(alpha))
+
+        if self.inputImageLabel.image is None or self.skeletonImageLabel.image is None:
+            return
+
+        merged_image = cv2.addWeighted(self.inputImageLabel.image, alpha, cv2.cvtColor(
+            self.skeletonImageLabel.image, cv2.COLOR_GRAY2BGR), 1.0 - alpha, 0)
+        self.mergedImageLabel.image = merged_image
+        self.mergedImageLabel.qimage = bgr2qimage(merged_image)
+        self.mergedImageLabel.setScaledPixmap()
+        self.mergedImageLabel.popUpImageView()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
