@@ -10,5 +10,6 @@ pyqtbook.sublime-workspace
 data/B3+CGRP-20x-1a.tif
 data/B3+CGRP-20x-1ab.tif
 data/B3+CGRP-20x-1b.tif
-data
 *.pyc
+/pyqt-book.sublime-project
+/pyqt-book.sublime-workspace
